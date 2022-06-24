@@ -1,4 +1,5 @@
 import requests
+import sqlite3
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
@@ -21,6 +22,9 @@ chrome_options.add_argument("--headless")
 id_users = {1: False}
 
 
+
+
+
 # возвращает инфу о боте
 # print(bot.getMe()) # шляпа через telePot
 # print(bot.getUpdates())
@@ -29,13 +33,13 @@ id_users = {1: False}
 @bot.message_handler(content_types=['text'])
 def get_text_messages(message):
     bot.send_message(message.from_user.id, "Запрос принят")
-    if message.text == "/start":
-        global id_users
+    global id_users
+    if message.text == "/set_average":
         # Если новый пользователь, то запоминаем его
         if (id_users.get(message.from_user.id) == None):
             id_users.update({message.from_user.id: True})
             print(id_users)
-            sendToUserInfo(message)
+            setAveragePrices(message)
         else:
             # Если пользователь уже пользовался ботом, то проверяем, запущен ли у него уже бот
             if (id_users[message.from_user.id]):
@@ -44,71 +48,125 @@ def get_text_messages(message):
             else:
                 print(id_users)
                 id_users[message.from_user.id] = True
-                sendToUserInfo(message)
-
-    elif message.text == "/stop":
-        if (id_users.get(message.from_user.id) == None):
-            id_users.update({message.from_user.id: False})
-        else:
-            id_users[message.from_user.id] = False
-
+                setAveragePrices(message)
     else:
-        bot.send_message(message.from_user.id, 'Неправильная команда, используй /start или /stop')
+        if message.text == "/start":
+            # Если новый пользователь, то запоминаем его
+            if (id_users.get(message.from_user.id) == None):
+                id_users.update({message.from_user.id: True})
+                print(id_users)
+                sendToUserInfo(message)
+            else:
+                # Если пользователь уже пользовался ботом, то проверяем, запущен ли у него уже бот
+                if (id_users[message.from_user.id]):
+                    print(id_users)
+                    bot.send_message(message.from_user.id, 'Бот уже запущен.')
+                else:
+                    print(id_users)
+                    id_users[message.from_user.id] = True
+                    sendToUserInfo(message)
+
+
+        elif message.text == "/stop":
+            if (id_users.get(message.from_user.id) == None):
+                id_users.update({message.from_user.id: False})
+            else:
+                id_users[message.from_user.id] = False
+
+        else:
+            bot.send_message(message.from_user.id, 'Неправильная команда, используй /start , /stop или /set_average')
+
+
+def setAveragePrices(message):
+    global id_users
+    conn = sqlite3.connect('table1.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM Предложения ")
+    k = 0
+    while id_users[message.from_user.id]:
+
+        k += 1
+        cursor.execute("SELECT * FROM Товары")
+        resulttable = cursor.fetchall()
+        for i in range(len(resulttable)):
+
+            print("https://eu.tamrieltradecentre.com/pc/Trade/SearchResult?SearchType=Sell&ItemNamePattern=" +
+                  resulttable[i][1].replace(' ', '+') + "&lang=ru-RU&page="+str(k))
+            print(resulttable[i])
+
+            driver = webdriver.Chrome(executable_path="C:\chromedriver.exe", options=chrome_options,
+                                      desired_capabilities=capa)
+            driver.get("https://eu.tamrieltradecentre.com/pc/Trade/SearchResult?SearchType=Sell&ItemNamePattern=" +
+                       resulttable[i][1].replace(' ', '+') + "&lang=ru-RU&page="+str(k))
+            bot.send_message(message.from_user.id, resulttable[i][1])
+            time.sleep(5)
+            # wait = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, 'trade-list-table')))
+            html = driver.page_source
+            soup = BeautifulSoup(html, features="lxml")
+            print('started')
+
+            costs = soup.findAll("span", {"data-bind": "localizedNumber: UnitPrice"})
+
+            for j in range(len(costs)):
+                cursor.execute("INSERT INTO Предложения(stuff_id, price) VALUES (:stuffID,:price)",
+                               {"stuffID": i + 1, "price": "".join(costs[j].text.split())})
+
+                conn.commit()
+                bot.send_message(message.from_user.id, "".join(costs[j].text.split()) + '\n')
+
+
+            driver.close()
+
+            print('finished')
+            time.sleep(5)
+            cursor.execute(
+                "UPDATE Товары SET avg_price = (SELECT avg(price)*0.85 FROM Предложения WHERE stuff_id == :stuffID) WHERE Товары.id == :stuffID",
+                {"stuffID": i + 1})
+            conn.commit()
+    conn.close()
 
 
 def sendToUserInfo(message):
     global id_users
+    conn = sqlite3.connect('table1.db')
+    cursor = conn.cursor()
     while id_users[message.from_user.id]:
-        CREDENTIALS_FILE = 'pythonttcbot-637204aa469e.json'  # Имя файла с закрытым ключом, вы должны подставить свое
+        cursor.execute("SELECT * FROM Товары")
+        resulttable = cursor.fetchall()
+        for i in range(len(resulttable)):
 
-        # Читаем ключи из файла
-        credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE,['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive'])
+            print("https://eu.tamrieltradecentre.com/pc/Trade/SearchResult?SearchType=Sell&ItemNamePattern=" +
+                  resulttable[i][1].replace(' ', '+') + '&PriceMax=' + str(resulttable[i][2]) + "&lang=ru-RU")
+            print(resulttable[i])
 
-        httpAuth = credentials.authorize(httplib2.Http())  # Авторизуемся в системе
-        service = apiclient.discovery.build('sheets', 'v4', http=httpAuth)  # Выбираем работу с таблицами и 4 версию API
-
-        spreadsheetId = "1q46uvPcfhRrwKRzstEqJxrVmdPDxJPbydlL-C1Sd3Vs"  # сохраняем идентификатор файла
-        print('https://docs.google.com/spreadsheets/d/' + spreadsheetId)
-
-        ranges = ["Лист номер один!B2:C5"]  #
-
-        results = service.spreadsheets().values().batchGet(spreadsheetId=spreadsheetId,
-                                                           ranges=ranges,
-                                                           valueRenderOption='FORMATTED_VALUE',
-                                                           dateTimeRenderOption='FORMATTED_STRING').execute()
-        sheet_values = results['valueRanges'][0]['values']
-        for i in range(len(sheet_values)):
-            sheet_values[i][0] = sheet_values[i][0].replace(' ', '+')
-            print(sheet_values[i])
-            print("https://eu.tamrieltradecentre.com/pc/Trade/SearchResult?SearchType=Sell&ItemNamePattern=" + sheet_values[i][0] + "&PriceMax=" + sheet_values[i][1] + "&lang=ru-RU")
-
-            driver = webdriver.Chrome(executable_path="C:\chromedriver.exe",options=chrome_options,desired_capabilities=capa)
-            driver.get("https://eu.tamrieltradecentre.com/pc/Trade/SearchResult?SearchType=Sell&ItemNamePattern="+sheet_values[i][0]+"&PriceMax="+sheet_values[i][1]+"&lang=ru-RU")
+            driver = webdriver.Chrome(executable_path="C:\chromedriver.exe", options=chrome_options,
+                                      desired_capabilities=capa)
+            driver.get("https://eu.tamrieltradecentre.com/pc/Trade/SearchResult?SearchType=Sell&ItemNamePattern=" +
+                       resulttable[i][1].replace(' ', '+') + '&PriceMax=' + str(resulttable[i][2]) + "&lang=ru-RU")
+            bot.send_message(message.from_user.id, resulttable[i][1])
             time.sleep(5)
-            wait = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, 'trade-list-table')))
+            # wait = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, 'trade-list-table')))
             html = driver.page_source
             soup = BeautifulSoup(html, features="lxml")
             print('started')
+
             locations = soup.findAll("div", {
                 "data-bind": "text: StringResource['TraderLocation' + DBData.GuildKioskLocation[GuildKioskLocationID]]"})
             guilds = soup.findAll("div", {"data-bind": "text: GuildName"})
             costs = soup.findAll("span", {"data-bind": "localizedNumber: UnitPrice"})
             time_ago = soup.findAll("td", {"data-bind": "minutesElapsed: DiscoverUnixTime"})
 
-            for i in range(len(locations)):
+            for j in range(len(locations)):
                 bot.send_message(message.from_user.id, 'Локация ' +
-                                 locations[i].text + ', гильдия ' +
-                                 guilds[i].text + ', цена = ' +
-                                 costs[i].text + ', в последний раз видели ' +
-                                 time_ago[i].text + '\n')
-            # print(locations[i].text)
-            # print(guilds[i].text)
-            # print(costs[i].text)
-            # print(time_ago[i].text + '\n')
+                                 locations[j].text + ', гильдия ' +
+                                 guilds[j].text + ', цена = ' +
+                                 costs[j].text + ', в последний раз видели ' +
+                                 time_ago[j].text + '\n')
 
             driver.close()
 
             print('finished')
-            time.sleep(10)
+            time.sleep(5)
+    conn.close()
 
 bot.infinity_polling()
